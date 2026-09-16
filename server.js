@@ -27,7 +27,7 @@ app.post("/generate-quiz", async (req, res) => {
 
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${API_KEY}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -44,6 +44,7 @@ Return only a JSON array in this format:
     );
 
     const data = await response.json();
+    console.log("AI API Response:", JSON.stringify(data, null, 2));
 
     // Check AI response
     if (data.candidates?.length > 0) {
