@@ -1,4 +1,6 @@
-# Quizine: AI-Powered Quiz Generator
+# Quizine: Real-Time Multiplayer AI Quiz Platform
+
+**Live Demo:** [https://quizine-app.onrender.com](https://quizine-app.onrender.com) *(Update this link if your Render URL is different)*
 
 Quizine is a full-stack web application that leverages generative artificial intelligence to dynamically create customized multiple-choice quizzes. Designed with an interactive and responsive user interface, the application allows users to generate educational content instantly based on user-defined topics and difficulty levels.
 
