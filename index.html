@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <title>QUIZINE</title>
+<script src="/socket.io/socket.io.js"></script>
 <style>
 /* Apple-like design: Reset + Base */
 * { margin:0; padding:0; box-sizing:border-box; }
@@ -23,9 +24,11 @@ body.dark { background:#000; color:#f5f5f7; }
   border-radius: 30px;
   padding: 40px;
   box-shadow: 0 8px 32px rgba(0,0,0,0.15);
-  max-width: 480px;
+  max-width: 500px;
   width: 90%;
   transition: 0.4s ease;
+  max-height: 90vh;
+  overflow-y: auto;
 }
 body.dark .card {
   background: rgba(30, 30, 30, 0.7);
@@ -49,6 +52,8 @@ input, select {
   outline:none;
   transition: 0.2s;
   background: rgba(255,255,255,0.8);
+  width: 100%;
+  margin-bottom: 10px;
 }
 input:focus, select:focus {
   border-color:#007aff;
@@ -58,6 +63,16 @@ body.dark input, body.dark select {
   background: rgba(40,40,40,0.8);
   color:#f5f5f7;
   border:1px solid rgba(255,255,255,0.1);
+}
+
+.flex-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.flex-row input, .flex-row select, .flex-row button {
+  margin-bottom: 0;
+  flex: 1;
 }
 
 /* Button */
@@ -71,11 +86,17 @@ button {
   background: linear-gradient(135deg, #007aff, #00c6ff);
   color:white;
   transition: transform 0.2s, background 0.3s;
+  width: 100%;
 }
 button:hover { transform: scale(1.03); }
 body.dark button {
   background: linear-gradient(135deg, #34c759, #30d158);
   color:#000;
+}
+
+button.secondary {
+  background: linear-gradient(135deg, #5856d6, #5ac8fa);
+  margin-top: 10px;
 }
 
 /* Quiz card */
@@ -105,6 +126,8 @@ body.dark .option:hover { background:#34c759; color:#000; }
 
 .show-answer { margin-top:10px; font-size:0.9rem; color:#ff9500; }
 #progress { margin-top:12px; text-align:center; font-weight:500; }
+#timer { font-size: 1.2rem; text-align: center; color: #ff3b30; font-weight: bold; margin-top: 10px; display: none; }
+#multiplayer-status { text-align: center; margin-top: 10px; font-weight: bold; color: #007aff; }
 
 /* Dark/Light toggle button */
 #themeToggle {
@@ -113,6 +136,7 @@ body.dark .option:hover { background:#34c759; color:#000; }
   border-radius:14px;
   background:#007aff; color:#fff; border:none;
   cursor:pointer; transition:0.3s;
+  width: auto;
 }
 body.dark #themeToggle { background:#34c759; color:#000; }
 #themeToggle:hover { transform: scale(1.05); }
@@ -129,26 +153,46 @@ body.dark #themeToggle { background:#34c759; color:#000; }
 
 <div class="card">
   <h1>QUIZINE</h1>
+  
   <form id="quizForm">
     <input type="text" id="topic" placeholder="Enter topic (e.g., football)" required>
-    <select id="numQuestions">
-      <option value="5">5 Questions</option>
-      <option value="10">10 Questions</option>
-    </select>
-    <select id="difficulty">
-      <option value="easy">Easy</option>
-      <option value="medium">Medium</option>
-      <option value="hard">Hard</option>
-    </select>
-    <button type="submit">Generate Quiz</button>
+    <div class="flex-row">
+      <select id="numQuestions">
+        <option value="5">5 Questions</option>
+        <option value="10">10 Questions</option>
+      </select>
+      <select id="difficulty">
+        <option value="easy">Easy</option>
+        <option value="medium">Medium</option>
+        <option value="hard">Hard</option>
+      </select>
+    </div>
+    <button type="submit">Generate Solo Quiz</button>
   </form>
+
+  <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid rgba(0,0,0,0.1);">
+    <h3 style="text-align: center; margin-bottom: 10px;">Multiplayer Mode</h3>
+    <div class="flex-row">
+      <input type="text" id="roomCode" placeholder="Room Code">
+      <button type="button" id="joinRoomBtn" style="background: #ff9500;">Join Room</button>
+    </div>
+    <div id="multiplayer-status"></div>
+  </div>
+
+  <div id="timer"></div>
   <div id="progress"></div>
   <div id="quizContainer"></div>
+  
+  <button id="exportCsvBtn" class="secondary" style="display: none;">📥 Export Quiz to CSV</button>
 </div>
 
 <canvas id="confetti"></canvas>
 
 <script>
+const socket = io();
+let currentRoom = null;
+let opponentScore = 0;
+
 const themeToggle = document.getElementById("themeToggle");
 themeToggle.addEventListener("click", () => {
   document.body.classList.toggle("dark");
@@ -158,14 +202,48 @@ themeToggle.addEventListener("click", () => {
 const quizForm = document.getElementById("quizForm");
 const quizContainer = document.getElementById("quizContainer");
 const progress = document.getElementById("progress");
+const timerEl = document.getElementById("timer");
+const exportCsvBtn = document.getElementById("exportCsvBtn");
+const joinRoomBtn = document.getElementById("joinRoomBtn");
+const roomCodeInput = document.getElementById("roomCode");
+const multiStatus = document.getElementById("multiplayer-status");
 
 let quizData = [], currentIndex = 0, score = 0;
+let countdownInterval = null;
+let timeLeft = 0;
+
+joinRoomBtn.addEventListener("click", () => {
+  const code = roomCodeInput.value.trim();
+  if(code) {
+    socket.emit("join_room", code);
+    currentRoom = code;
+    multiStatus.textContent = `Joined room: ${code}. Waiting for opponents...`;
+  }
+});
+
+socket.on("player_joined", (data) => {
+  if (currentRoom) {
+    multiStatus.textContent = `Opponent joined! Ready to compete.`;
+  }
+});
+
+socket.on("opponent_score", (data) => {
+  if (data.id !== socket.id) {
+    opponentScore = data.score;
+    if (currentIndex >= quizData.length) {
+      multiStatus.textContent = `Opponent finished with score: ${opponentScore}`;
+    }
+  }
+});
 
 quizForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  quizContainer.innerHTML = "<p>Loading quiz...</p>";
+  quizContainer.innerHTML = "<p>Loading quiz with AI...</p>";
   progress.textContent = "";
-  score = 0; currentIndex = 0;
+  timerEl.style.display = "none";
+  exportCsvBtn.style.display = "none";
+  score = 0; currentIndex = 0; opponentScore = 0;
+  if(countdownInterval) clearInterval(countdownInterval);
 
   const topic = document.getElementById("topic").value;
   const numQuestions = parseInt(document.getElementById("numQuestions").value);
@@ -178,16 +256,32 @@ quizForm.addEventListener("submit", async (e) => {
       body: JSON.stringify({ topic, numQuestions, difficulty })
     });
     quizData = await res.json();
+    startTimer(numQuestions * 15); // 15 seconds per question
     displayQuestion(currentIndex);
+    exportCsvBtn.style.display = "block";
   } catch {
     quizContainer.innerHTML = "<p>Failed to load quiz. Try again.</p>";
   }
 });
 
+function startTimer(seconds) {
+  timeLeft = seconds;
+  timerEl.style.display = "block";
+  timerEl.textContent = `⏱ Time Left: ${timeLeft}s`;
+  countdownInterval = setInterval(() => {
+    timeLeft--;
+    timerEl.textContent = `⏱ Time Left: ${timeLeft}s`;
+    if (timeLeft <= 0) {
+      clearInterval(countdownInterval);
+      endQuiz();
+    }
+  }, 1000);
+}
+
 function displayQuestion(index) {
   if(index >= quizData.length) {
-    quizContainer.innerHTML = `<h2>Quiz Completed! Score: ${score}/${quizData.length}</h2>`;
-    triggerConfetti(); return;
+    endQuiz();
+    return;
   }
 
   const q = quizData[index];
@@ -210,6 +304,11 @@ function displayQuestion(index) {
       if(optionBtn.classList.contains("correct") || optionBtn.classList.contains("incorrect")) return;
       if(opt === q.correctAnswer) { optionBtn.classList.add("correct"); score++; }
       else { optionBtn.classList.add("incorrect"); }
+      
+      if (currentRoom) {
+        socket.emit("submit_score", { roomCode: currentRoom, score });
+      }
+
       setTimeout(() => { currentIndex++; displayQuestion(currentIndex); }, 600);
     });
     optionsDiv.appendChild(optionBtn);
@@ -224,6 +323,44 @@ function displayQuestion(index) {
   quizContainer.appendChild(card);
   progress.textContent = `Question ${index+1} of ${quizData.length} | Score: ${score}`;
 }
+
+function endQuiz() {
+  if(countdownInterval) clearInterval(countdownInterval);
+  timerEl.style.display = "none";
+  let resultHtml = `<h2>Quiz Completed!</h2><p>Your Score: ${score}/${quizData.length}</p>`;
+  if (currentRoom) {
+    resultHtml += `<p>Opponent Score: ${opponentScore}</p>`;
+    if (score > opponentScore) resultHtml += `<h3 style="color:#34c759">You Won! 🎉</h3>`;
+    else if (score < opponentScore) resultHtml += `<h3 style="color:#ff3b30">You Lost! 😢</h3>`;
+    else resultHtml += `<h3 style="color:#ff9500">It's a Tie! 🤝</h3>`;
+  }
+  quizContainer.innerHTML = resultHtml;
+  triggerConfetti();
+}
+
+// Export CSV Logic
+exportCsvBtn.addEventListener("click", () => {
+  if (!quizData || quizData.length === 0) return;
+  let csvContent = "data:text/csv;charset=utf-8,";
+  csvContent += "Question,Option 1,Option 2,Option 3,Option 4,Correct Answer\n";
+  
+  quizData.forEach(q => {
+    const row = [
+      `"${q.question}"`,
+      `"${q.options[0]}"`, `"${q.options[1]}"`, `"${q.options[2]}"`, `"${q.options[3]}"`,
+      `"${q.correctAnswer}"`
+    ].join(",");
+    csvContent += row + "\n";
+  });
+  
+  const encodedUri = encodeURI(csvContent);
+  const link = document.createElement("a");
+  link.setAttribute("href", encodedUri);
+  link.setAttribute("download", "quizine_export.csv");
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+});
 
 // Confetti animation
 const confettiCanvas = document.getElementById("confetti");
